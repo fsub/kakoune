@@ -255,8 +255,9 @@ NCursesUI::NCursesUI()
         if (not m_on_key)
             return;
 
-        while (auto key = get_next_key())
-            m_on_key(*key);
+        for (auto keys = get_next_keys(); not keys.empty(); keys = get_next_keys())
+            for (const auto& key : keys)
+                m_on_key(key);
       }},
       m_assistant(assistant_clippy),
       m_colors{default_colors},
@@ -525,7 +526,7 @@ void NCursesUI::check_resize(bool force)
     werase(curscr);
 }
 
-Optional<Key> NCursesUI::get_next_key()
+KeyList NCursesUI::get_next_keys()
 {
     if (sighup_raised)
     {
@@ -541,7 +542,7 @@ Optional<Key> NCursesUI::get_next_key()
     if (m_resize_pending)
     {
         m_resize_pending = false;
-        return resize(dimensions());
+        return {resize(dimensions())};
     }
 
     wtimeout(m_window, 0);
@@ -579,35 +580,35 @@ Optional<Key> NCursesUI::get_next_key()
                 return res | Key::Modifiers::MousePos;
             };
 
-            return Key{ get_modifiers(ev.bstate),
-                        encode_coord({ ev.y - content_line_offset(), ev.x }) };
+            return {Key{get_modifiers(ev.bstate),
+                        encode_coord({ ev.y - content_line_offset(), ev.x })}};
         }
     }
 
-    auto parse_key = [this](int c) -> Optional<Key> {
+    auto parse_keys = [this](int c) -> KeyList {
         switch (c)
         {
         case KEY_BACKSPACE: case 127: return {Key::Backspace};
         case KEY_DC: return {Key::Delete};
-        case KEY_SDC: return shift(Key::Delete);
+        case KEY_SDC: return {shift(Key::Delete)};
         case KEY_UP: return {Key::Up};
-        case KEY_SR: return shift(Key::Up);
+        case KEY_SR: return {shift(Key::Up)};
         case KEY_DOWN: return {Key::Down};
-        case KEY_SF: return shift(Key::Down);
+        case KEY_SF: return {shift(Key::Down)};
         case KEY_LEFT: return {Key::Left};
-        case KEY_SLEFT: return shift(Key::Left);
+        case KEY_SLEFT: return {shift(Key::Left)};
         case KEY_RIGHT: return {Key::Right};
-        case KEY_SRIGHT: return shift(Key::Right);
+        case KEY_SRIGHT: return {shift(Key::Right)};
         case KEY_PPAGE: return {Key::PageUp};
-        case KEY_SPREVIOUS: return shift(Key::PageUp);
+        case KEY_SPREVIOUS: return {shift(Key::PageUp)};
         case KEY_NPAGE: return {Key::PageDown};
-        case KEY_SNEXT: return shift(Key::PageDown);
+        case KEY_SNEXT: return {shift(Key::PageDown)};
         case KEY_HOME: return {Key::Home};
-        case KEY_SHOME: return shift(Key::Home);
+        case KEY_SHOME: return {shift(Key::Home)};
         case KEY_END: return {Key::End};
-        case KEY_SEND: return shift(Key::End);
-        case KEY_BTAB: return shift(Key::Tab);
-        case KEY_RESIZE: return resize(dimensions());
+        case KEY_SEND: return {shift(Key::End)};
+        case KEY_BTAB: return {shift(Key::Tab)};
+        case KEY_RESIZE: return {resize(dimensions())};
         }
 
         if (c > 0 and c < 27)
@@ -629,15 +630,31 @@ Optional<Key> NCursesUI::get_next_key()
                 enable_mouse(mouse_enabled);
                 return {};
             }
-            return ctrl(Codepoint(c) - 1 + 'a');
+            return {ctrl(Codepoint(c) - 1 + 'a')};
         }
 
-        for (int i = 0; i < 12; ++i)
         {
-            if (c == KEY_F(i + 1))
-                return {Key::F1 + i};
-            if (c == KEY_F(m_shift_function_key + i + 1))
-                return shift(Key::F1 + i);
+            KeyList keys;
+            for (int i = 0; i < 12; ++i)
+            {
+                if (c == KEY_F(i + 1))
+                {
+                    keys.emplace_back(Key::F1 + i);
+                    break;
+                }
+            }
+            for (int i = 0; i < 12; ++i)
+            {
+                if (c == KEY_F(m_shift_function_key + i + 1))
+                {
+                    keys.push_back(shift(Key::F1 + i));
+                    break;
+                }
+            }
+            if (!keys.empty())
+            {
+               return keys;
+            }
         }
 
         if (c >= 0 and c < 256)
@@ -651,10 +668,10 @@ Optional<Key> NCursesUI::get_next_key()
                getch_iterator& operator++(int) { return *this; }
                bool operator== (const getch_iterator&) const { return false; }
 
-                WINDOW* window;
+               WINDOW* window;
            };
-           return Key{utf8::codepoint(getch_iterator{m_window},
-                                      getch_iterator{m_window})};
+           return {Key{utf8::codepoint(getch_iterator{m_window},
+                                       getch_iterator{m_window})}};
         }
         return {};
     };
@@ -713,17 +730,23 @@ Optional<Key> NCursesUI::get_next_key()
         if (new_c == '[') // potential CSI
         {
             if (auto key = parse_csi())
-                return key;
+                return (key ? KeyList{*key} : KeyList{});
         }
         wtimeout(m_window, -1);
 
-        if (auto key = parse_key(new_c))
-            return alt(*key);
-        else
-            return {Key::Escape};
+        {
+            auto keys = parse_keys(new_c);
+            if (not keys.empty())
+            {
+                for (auto& key : keys)
+                    key = alt(key);
+                return keys;
+            }
+        }
+        return {Key::Escape};
     }
 
-    return parse_key(c);
+    return parse_keys(c);
 }
 
 template<typename T>
